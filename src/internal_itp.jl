@@ -1,18 +1,23 @@
 """
 `InternalITP`: A non-allocating ITP method, internal to DiffEqBase for
-simpler dependencies.
+simpler dependencies. k2 is specified as a type parameter in order to 
+facilitate constant propagation (which turns the exponentiation in ITP
+to a simple product for the default case k2 = 2).
 """
-struct InternalITP
-    k1::Float64
-    k2::Float64
+struct InternalITP{k2}
+    scaled_k1::Float64
     n0::Int
+    function InternalITP(; scaled_k1 = 0.2, k2 = 2, n0 = 0)
+        1 < k2 <= 2.618033988749895 || error("Invalid value of k2=$k2")
+        0 < scaled_k1 || error("Invalid value of k1=$scaled_k1")
+        new{k2}(scaled_k1, n0)
+    end
 end
 
-InternalITP() = InternalITP(0.007, 1.5, 10)
-
-function SciMLBase.solve(prob::IntervalNonlinearProblem{IP, Tuple{T, T}}, alg::InternalITP,
+function SciMLBase.solve(
+        prob::IntervalNonlinearProblem{IP, Tuple{T, T}}, alg::InternalITP{k2},
         args...;
-        maxiters = 1000, kwargs...) where {IP, T}
+        maxiters = 1000, kwargs...) where {IP, T, k2}
     f = Base.Fix2(prob.f, prob.p)
     left, right = prob.tspan # a and b
     fl, fr = f(left), f(right)
@@ -27,9 +32,8 @@ function SciMLBase.solve(prob::IntervalNonlinearProblem{IP, Tuple{T, T}}, alg::I
             right = right)
     end
     #defining variables/cache
-    k1 = T(alg.k1)
-    k2 = T(alg.k2)
-    n0 = T(alg.n0)
+    k1 = alg.scaled_k1 * abs(right - left)^(1 - k2)
+    n0 = alg.n0
     n_h = ceil(log2(abs(right - left) / (2 * ϵ)))
     mid = (left + right) / 2
     x_f = (fr * left - fl * right) / (fr - fl)
@@ -70,10 +74,11 @@ function SciMLBase.solve(prob::IntervalNonlinearProblem{IP, Tuple{T, T}}, alg::I
         xp <= tmin && (xp = nextfloat(tmin))
         yp = f(xp)
         yps = yp * sign(fr)
-        if yps > 0
+        T0 = zero(yps)
+        if yps > T0
             right = xp
             fr = yp
-        elseif yps < 0
+        elseif yps < T0
             left = xp
             fl = yp
         else
